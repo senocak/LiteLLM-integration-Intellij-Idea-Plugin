@@ -9,13 +9,27 @@ import com.intellij.util.io.HttpRequests
 import java.io.IOException
 import java.net.SocketTimeoutException
 
+internal object HttpTimeouts {
+    const val CONNECT_MS = 10_000
+    const val READ_MS = 60_000
+}
+
+/** Request dialect. The gateway decides which one it speaks; see [CommitMessageClient.post]. */
+private enum class WireFormat { CHAT, ANTHROPIC }
+
 object CommitMessageClient {
-    private const val CONNECT_TIMEOUT_MS = 10_000
-    private const val READ_TIMEOUT_MS = 60_000
+    private const val CONNECT_TIMEOUT_MS = HttpTimeouts.CONNECT_MS
+    private const val READ_TIMEOUT_MS = HttpTimeouts.READ_MS
     // Some reasoning-capable gateway models need room to reason before returning the short
     // commit-message text. This remains an internal limit to keep Settings intentionally small.
     private const val MAX_OUTPUT_TOKENS = 2_048
     private val LOG = Logger.getInstance(CommitMessageClient::class.java)
+
+    /**
+     * Which dialect each gateway turned out to speak, so the fallback is probed at most
+     * once per base URL per IDE session rather than on every generation.
+     */
+    private val resolvedFormats = java.util.concurrent.ConcurrentHashMap<String, WireFormat>()
 
     fun generateCommitMessage(configuration: ApiConfiguration, diff: String): String {
         val response = post(configuration, "Generate a commit message for the following Git diff:\n\n$diff")
@@ -29,32 +43,55 @@ object CommitMessageClient {
         if (extractMessage(response).isBlank()) throw ApiException("Model returned an empty response.")
     }
 
+    /**
+     * Chat Completions is tried first: on a LiteLLM gateway it serves every model, including
+     * the ones whose backend rejects Anthropic's `max_tokens` and demands
+     * `max_completion_tokens`. Anthropic Messages is kept as a fallback purely so a non-LiteLLM
+     * endpoint still works — it is used only when the chat route is absent (404/405), never to
+     * paper over a real error such as 401 or 400.
+     */
     private fun post(configuration: ApiConfiguration, userMessage: String): String {
-        val payload = JsonObject().apply {
-            addProperty("model", configuration.model)
-            addProperty("max_tokens", MAX_OUTPUT_TOKENS)
-            addProperty("stream", false)
-            addProperty("system", configuration.systemPrompt)
-            add("messages", JsonArray().apply {
-                add(JsonObject().apply {
-                    addProperty("role", "user")
-                    addProperty("content", userMessage)
-                })
-            })
+        val preferred = resolvedFormats[configuration.baseUrl] ?: WireFormat.CHAT
+        return try {
+            send(configuration, userMessage, preferred).also { resolvedFormats[configuration.baseUrl] = preferred }
+        } catch (exception: HttpRequests.HttpStatusException) {
+            val routeMissing = exception.statusCode == 404 || exception.statusCode == 405
+            if (!routeMissing || preferred != WireFormat.CHAT) {
+                LOG.warn("Custom Commit AI: API returned HTTP ${exception.statusCode}.")
+                throw ApiException("API returned HTTP ${exception.statusCode}.")
+            }
+            LOG.info("Custom Commit AI: no chat/completions route (HTTP ${exception.statusCode}); trying Anthropic messages.")
+            try {
+                send(configuration, userMessage, WireFormat.ANTHROPIC)
+                    .also { resolvedFormats[configuration.baseUrl] = WireFormat.ANTHROPIC }
+            } catch (fallback: HttpRequests.HttpStatusException) {
+                LOG.warn("Custom Commit AI: Anthropic fallback returned HTTP ${fallback.statusCode}.")
+                throw ApiException("API returned HTTP ${fallback.statusCode}.")
+            }
         }
+    }
+
+    private fun send(configuration: ApiConfiguration, userMessage: String, format: WireFormat): String {
+        val url = if (format == WireFormat.CHAT) configuration.chatUrl else configuration.messagesUrl
+        val payload = if (format == WireFormat.CHAT) chatPayload(configuration, userMessage)
+        else anthropicPayload(configuration, userMessage)
 
         try {
             LOG.info("Custom Commit AI: API request payload: $payload")
-            LOG.info("Custom Commit AI: sending API request (model=${configuration.model}, apiKeyConfigured=${configuration.apiKey.isNotBlank()}).")
-            val response = HttpRequests.post(configuration.apiUrl, "application/json")
+            LOG.info("Custom Commit AI: sending $format request to $url (model=${configuration.model}, apiKeyConfigured=${configuration.apiKey.isNotBlank()}).")
+            val response = HttpRequests.post(url, "application/json")
                 .connectTimeout(CONNECT_TIMEOUT_MS)
                 .readTimeout(READ_TIMEOUT_MS)
                 .tuner { connection ->
                     connection.setRequestProperty("Accept", "application/json")
-                    // This is the header contract used by the configured gateway. The key remains
-                    // optional; when absent, no credential header is sent.
-                    if (configuration.apiKey.isNotBlank()) connection.setRequestProperty("x-api-key", configuration.apiKey)
-                    connection.setRequestProperty("anthropic-version", "2023-06-01")
+                    // The key remains optional; when absent, no credential header is sent.
+                    // Both header styles are accepted by LiteLLM, and sending the one each
+                    // dialect expects keeps a stricter upstream happy.
+                    if (configuration.apiKey.isNotBlank()) {
+                        connection.setRequestProperty("x-api-key", configuration.apiKey)
+                        connection.setRequestProperty("Authorization", "Bearer ${configuration.apiKey}")
+                    }
+                    if (format == WireFormat.ANTHROPIC) connection.setRequestProperty("anthropic-version", "2023-06-01")
                 }
                 .connect { request ->
                     request.connection.outputStream.writer(Charsets.UTF_8).use { it.write(payload.toString()) }
@@ -63,13 +100,48 @@ object CommitMessageClient {
             LOG.info("Custom Commit AI: API request completed successfully (responseChars=${response.length}).")
             LOG.info("Custom Commit AI: API response: $response")
             return response
-        } catch (exception: HttpRequests.HttpStatusException) {
-            LOG.warn("Custom Commit AI: API returned HTTP ${exception.statusCode}.")
-            throw ApiException("API returned HTTP ${exception.statusCode}.")
         } catch (exception: IOException) {
+            if (exception is HttpRequests.HttpStatusException) throw exception   // handled by post()
             LOG.warn("Custom Commit AI: API request failed (${exception.javaClass.simpleName}).")
             throw ApiException("Failed to connect to the configured API.", exception)
         }
+    }
+
+    /**
+     * OpenAI Chat Completions. Two details are not interchangeable with the Anthropic body:
+     * the token cap must be `max_completion_tokens` (some backends reject `max_tokens`
+     * outright), and the system prompt must be a message — a top-level `system` property is
+     * rejected as an unpermitted extra input.
+     */
+    private fun chatPayload(configuration: ApiConfiguration, userMessage: String) = JsonObject().apply {
+        addProperty("model", configuration.model)
+        addProperty("max_completion_tokens", MAX_OUTPUT_TOKENS)
+        addProperty("stream", false)
+        add("messages", JsonArray().apply {
+            if (configuration.systemPrompt.isNotBlank()) {
+                add(JsonObject().apply {
+                    addProperty("role", "system")
+                    addProperty("content", configuration.systemPrompt)
+                })
+            }
+            add(JsonObject().apply {
+                addProperty("role", "user")
+                addProperty("content", userMessage)
+            })
+        })
+    }
+
+    private fun anthropicPayload(configuration: ApiConfiguration, userMessage: String) = JsonObject().apply {
+        addProperty("model", configuration.model)
+        addProperty("max_tokens", MAX_OUTPUT_TOKENS)
+        addProperty("stream", false)
+        addProperty("system", configuration.systemPrompt)
+        add("messages", JsonArray().apply {
+            add(JsonObject().apply {
+                addProperty("role", "user")
+                addProperty("content", userMessage)
+            })
+        })
     }
 
     private fun extractMessage(response: String): String {

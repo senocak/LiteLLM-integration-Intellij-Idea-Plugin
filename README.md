@@ -4,21 +4,50 @@ Minimal IntelliJ IDEA plugin that adds a small **Generate Commit Message** actio
 
 ## Configure
 
-In **Settings | Tools | Custom Commit AI**, enter the API URL, model, optional API key, and system prompt. The key is stored in IntelliJ's Password Safe rather than in the persistent settings XML.
+In **Settings | Tools | Custom Commit AI**, enter the API URL, optional API key, and system prompt, then pick a model. The key is stored in IntelliJ's Password Safe rather than in the persistent settings XML.
 
-The client uses the same non-streaming request contract as the companion web UI:
+### Model list
+
+Once the URL and key are filled in, the **Model** dropdown loads itself from `GET {base}/models` — when the page opens, again shortly after you edit either field, and on demand via **Refresh**. That endpoint is key-scoped on a LiteLLM gateway, so the list is exactly what your key may reach; swapping the key swaps the list, which is how a single field covers separate claude and codex allowlists.
+
+The dropdown is selection-only: a hand-typed id the key cannot serve would just fail later at generation time, so the gateway's own list is the only source of valid values. A failed load still never clears your saved model — it stays in the list and selected, because nothing else could put it back.
+
+Changing the key does drop a model the new key cannot serve, and says so, since the allowlists do not overlap.
+
+### API Base URL
+
+Enter the **gateway root only** — `https://host` is enough. The plugin knows only that it is talking to a LiteLLM-compatible gateway, never which one, so it derives `/models`, `/chat/completions` and `/messages` itself. A hint under the field shows exactly what it will call.
+
+A trailing `/messages`, `/chat/completions` or `/responses` is stripped, and `/v1` is appended only when no path is given at all:
+
+| you enter | base becomes |
+| --- | --- |
+| `https://host` | `https://host/v1` |
+| `https://host/v1` | `https://host/v1` |
+| `https://host/v1/messages` | `https://host/v1` |
+| `https://host/llm/v1` | `https://host/llm/v1` — sub-path left alone |
+
+Normalisation runs on load and on save, so a setting from when this field held a full endpoint URL is migrated in place the first time you open the IDE; the field then shows the base the plugin actually uses rather than a path it ignores.
+
+### Request
+
+The client posts non-streaming Chat Completions, which on a LiteLLM gateway serves every model — claude, gpt, glm, kimi and deepseek alike:
 
 ```json
 {
   "model": "your-model",
-  "max_tokens": 256,
+  "max_completion_tokens": 2048,
   "stream": false,
-  "system": "...",
-  "messages": [{ "role": "user", "content": "Generate a commit message..." }]
+  "messages": [
+    { "role": "system", "content": "..." },
+    { "role": "user", "content": "Generate a commit message..." }
+  ]
 }
 ```
 
-It sends `x-api-key` only when a key is configured, plus `anthropic-version: 2023-06-01`. The URL remains fully configurable. It parses the gateway's non-streaming message response and also accepts the conventional `choices[0].message.content` response shape.
+Two details are not interchangeable with the Anthropic body: the cap must be `max_completion_tokens`, because some backends reject `max_tokens` outright, and the system prompt must be a *message* — a top-level `system` property is refused as an unpermitted extra input.
+
+If `{base}/chat/completions` does not exist (404/405), the client retries once against `{base}/messages` with the Anthropic body and `anthropic-version: 2023-06-01`, so a plain Anthropic endpoint still works. Any other status is reported as-is rather than papered over, and the resolved dialect is remembered per gateway for the session. Responses are read from `choices[0].message.content` or Anthropic `content[]` blocks. `x-api-key` and `Authorization: Bearer` are sent only when a key is configured.
 
 ## Build and run
 
