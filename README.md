@@ -28,3 +28,7 @@ bash ./gradlew runIde
 ```
 
 The project targets IntelliJ IDEA 2025.3.5 and Java 21. The action is registered in `ChangesView.CommitToolbar`, receives the active commit-message control, and reads `COMMIT_WORKFLOW_UI.includedChanges` plus `includedUnversionedFiles` at click time. This means a new message is generated from exactly the files currently checked for commit, never from unrelated working-tree changes.
+
+### Screenshot
+<img src="img1.png" alt="Screenshot 1"/>
+<img src="img2.png" alt="Screenshot 2"/>
