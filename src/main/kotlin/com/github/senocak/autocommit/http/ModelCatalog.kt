@@ -22,7 +22,7 @@ object ModelCatalog {
         val url = configuration.modelsUrl
 
         val response = try {
-            LOG.info("Custom Commit AI: fetching models from $url.")
+            LOG.info("LiteLLM Integration: fetching models from $url.")
             HttpRequests.request(url)
                 .connectTimeout(HttpTimeouts.CONNECT_MS)
                 // Deliberately shorter than the generation timeout: listing models is a cheap
@@ -39,16 +39,16 @@ object ModelCatalog {
                 }
                 .readString()
         } catch (exception: HttpRequests.HttpStatusException) {
-            LOG.warn("Custom Commit AI: model list returned HTTP ${exception.statusCode}.")
+            LOG.warn("LiteLLM Integration: model list returned HTTP ${exception.statusCode}.")
             throw ApiException("Could not list models: HTTP ${exception.statusCode}.")
         } catch (exception: IOException) {
-            LOG.warn("Custom Commit AI: model list request failed (${exception.javaClass.simpleName}).")
+            LOG.warn("LiteLLM Integration: model list request failed (${exception.javaClass.simpleName}).")
             throw ApiException("Could not reach $url to list models.", exception)
         }
 
         val models = parse(response)
         if (models.isEmpty()) throw ApiException("The gateway returned an empty model list.")
-        LOG.info("Custom Commit AI: gateway offers ${models.size} model(s).")
+        LOG.info("LiteLLM Integration: gateway offers ${models.size} model(s).")
         return models
     }
 

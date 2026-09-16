@@ -9,6 +9,7 @@ import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.ui.DocumentAdapter
+import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBPasswordField
 import com.intellij.ui.components.JBScrollPane
@@ -54,12 +55,14 @@ class CustomCommitAiConfigurable : Configurable {
     private var promptField: JTextArea? = null
     private var refreshButton: JButton? = null
     private var endpointHint: JBLabel? = null
+    private var completionCombo: ComboBox<String>? = null
+    private var completionToggle: JBCheckBox? = null
 
     /** Coalesces keystrokes so the gateway is asked once the user stops typing, not per character. */
     private var reloadDebounce: Timer? = null
     private var loading = false
 
-    override fun getDisplayName() = "Custom Commit AI"
+    override fun getDisplayName() = "LiteLLM Integration"
 
     override fun createComponent(): JComponent {
         val settingsPanel = JPanel(GridBagLayout())
@@ -89,6 +92,15 @@ class CustomCommitAiConfigurable : Configurable {
             isEditable = false
             toolTipText = "Loaded from the gateway's /models endpoint. Use Refresh if the list looks stale."
         }
+        // Same list, different job: this one wants speed, not reasoning quality.
+        completionCombo = ComboBox<String>().apply {
+            isEditable = false
+            toolTipText = "Model used for inline code suggestions. Prefer a small, fast one \u2014 " +
+                "a reasoning model spends seconds thinking before it emits a line."
+        }
+        completionToggle = JBCheckBox("Suggest completions while typing").apply {
+            toolTipText = "When off, suggestions appear only when you invoke inline completion explicitly."
+        }
         keyField = JBPasswordField()
         promptField = JTextArea(6, 48).apply { lineWrap = true; wrapStyleWord = true }
 
@@ -104,13 +116,15 @@ class CustomCommitAiConfigurable : Configurable {
         }
 
         addRow(0, "API Base URL:", urlRow)
-        addRow(1, "Model:", modelRow)
-        addRow(2, "API Key:", keyField!!)
-        addRow(3, "System Prompt:", JBScrollPane(promptField!!), GridBagConstraints.BOTH)
+        addRow(1, "API Key:", keyField!!)
+        addRow(2, "Commit Model:", modelRow)
+        addRow(3, "Completion Model:", completionCombo!!)
+        addRow(4, "", completionToggle!!)
+        addRow(5, "System Prompt:", JBScrollPane(promptField!!), GridBagConstraints.BOTH)
 
         val testButton = JButton("Test Connection")
         testButton.addActionListener { testConnection(testButton) }
-        constraints.gridx = 1; constraints.gridy = 4; constraints.weightx = 0.0; constraints.fill = GridBagConstraints.NONE
+        constraints.gridx = 1; constraints.gridy = 6; constraints.weightx = 0.0; constraints.fill = GridBagConstraints.NONE
         settingsPanel.add(testButton, constraints)
 
         panel = JPanel(BorderLayout()).apply { add(settingsPanel, BorderLayout.NORTH) }
@@ -136,6 +150,8 @@ class CustomCommitAiConfigurable : Configurable {
         val configuration = CustomCommitAiSettings.getInstance().configuration()
         return urlField?.text?.trim() != configuration.apiUrl ||
             selectedModel() != configuration.model ||
+            selectedCompletionModel() != configuration.completionModel ||
+            completionToggle?.isSelected != configuration.completionEnabled ||
             String(keyField?.password ?: CharArray(0)) != configuration.apiKey ||
             promptField?.text?.trim() != configuration.systemPrompt
     }
@@ -145,7 +161,11 @@ class CustomCommitAiConfigurable : Configurable {
     override fun reset() {
         val configuration = CustomCommitAiSettings.getInstance().configuration()
         urlField?.text = configuration.apiUrl
-        setModelItems(emptyList(), configuration.model, allowUnlisted = true)
+        // Seed each combo with its own saved value before any fetch, so an unreachable gateway
+        // still shows what is configured.
+        apply(modelCombo, emptyList(), configuration.model, allowUnlisted = true)
+        apply(completionCombo, emptyList(), configuration.completionModel, allowUnlisted = true)
+        completionToggle?.isSelected = configuration.completionEnabled
         keyField?.text = configuration.apiKey
         promptField?.text = configuration.systemPrompt
     }
@@ -155,12 +175,21 @@ class CustomCommitAiConfigurable : Configurable {
         reloadDebounce = null
         panel = null; urlField = null; modelCombo = null; keyField = null
         promptField = null; refreshButton = null; endpointHint = null
+        completionCombo = null; completionToggle = null
     }
 
     private fun selectedModel(): String = (modelCombo?.selectedItem as? String).orEmpty().trim()
 
+    private fun selectedCompletionModel(): String = (completionCombo?.selectedItem as? String).orEmpty().trim()
+
+    /** One fetch feeds both dropdowns; they differ only in which entry stays selected. */
     private fun setModelItems(items: List<String>, select: String, allowUnlisted: Boolean) {
-        val combo = modelCombo ?: return
+        apply(modelCombo, items, select, allowUnlisted)
+        apply(completionCombo, items, selectedCompletionModel().ifBlank { select }, allowUnlisted)
+    }
+
+    private fun apply(combo: ComboBox<String>?, items: List<String>, select: String, allowUnlisted: Boolean) {
+        if (combo == null) return
         val (all, chosen) = modelChoice(items, select, allowUnlisted)
         combo.model = DefaultComboBoxModel(all.toTypedArray())
         combo.selectedItem = chosen
@@ -237,11 +266,16 @@ class CustomCommitAiConfigurable : Configurable {
         selectedModel(),
         String(keyField?.password ?: CharArray(0)),
         promptField?.text?.trim().orEmpty(),
+        selectedCompletionModel(),
+        completionToggle?.isSelected ?: true,
     )
 
     private fun save() {
         val current = currentConfiguration()
-        CustomCommitAiSettings.getInstance().update(current.apiUrl, current.model, current.apiKey, current.systemPrompt)
+        CustomCommitAiSettings.getInstance().update(
+            current.apiUrl, current.model, current.apiKey, current.systemPrompt,
+            current.completionModel, current.completionEnabled,
+        )
         // Show the stored base back to the user: applying a full endpoint URL silently rewrites
         // it, and leaving the old text on screen would misreport what was saved.
         val stored = CustomCommitAiSettings.getInstance().configuration().apiUrl
@@ -255,7 +289,7 @@ class CustomCommitAiConfigurable : Configurable {
             return
         }
         button.isEnabled = false
-        object : Task.Backgroundable(null, "Testing Custom Commit AI connection...", true) {
+        object : Task.Backgroundable(null, "Testing LiteLLM Integration connection...", true) {
             private var error: String? = null
 
             override fun run(indicator: ProgressIndicator) {

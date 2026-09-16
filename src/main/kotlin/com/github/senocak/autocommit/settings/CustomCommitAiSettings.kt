@@ -44,12 +44,32 @@ internal fun normalizeBaseUrl(url: String): String {
     return if (base.substringAfter("://", "").contains('/')) base else "$base/v1"
 }
 
+/** Inline-completion settings that carry no secret, so they cost nothing to read on the EDT. */
+data class CompletionPreferences(
+    val baseUrl: String,
+    val model: String,
+    val enabled: Boolean,
+) {
+    /** Everything except the key; the key is checked later, off the EDT. */
+    val configured: Boolean get() = baseUrl.isNotBlank() && model.isNotBlank()
+}
+
 data class ApiConfiguration(
     val apiUrl: String,
     val model: String,
     val apiKey: String,
     val systemPrompt: String,
+    /**
+     * Separate from [model] because the two have opposite priorities: a commit message is worth
+     * waiting seconds for, an inline suggestion is not. Blank means completion is unconfigured.
+     */
+    val completionModel: String = "",
+    val completionEnabled: Boolean = true,
 ) {
+    /** Everything inline completion needs before it is worth sending a request. */
+    val completionReady: Boolean
+        get() = apiUrl.isNotBlank() && apiKey.isNotBlank() && completionModel.isNotBlank()
+
     val baseUrl: String get() = normalizeBaseUrl(apiUrl)
 
     val modelsUrl: String get() = "$baseUrl/models"
@@ -57,8 +77,8 @@ data class ApiConfiguration(
     val messagesUrl: String get() = "$baseUrl/messages"
 
     fun validationError(): String? = when {
-        apiUrl.isBlank() -> "Custom Commit AI: API base URL is not configured."
-        model.isBlank() -> "Custom Commit AI: Model is not configured."
+        apiUrl.isBlank() -> "LiteLLM Integration: API base URL is not configured."
+        model.isBlank() -> "LiteLLM Integration: Model is not configured."
         else -> null
     }
 }
@@ -70,9 +90,19 @@ class CustomCommitAiSettings : PersistentStateComponent<CustomCommitAiSettings.S
         var apiUrl: String = ""
         var model: String = ""
         var systemPrompt: String = DEFAULT_PROMPT
+        var completionModel: String = ""
+        var completionEnabled: Boolean = true
     }
 
     private var state = State()
+
+    /**
+     * Password Safe reads are flagged as slow operations on the EDT, and inline completion asks
+     * whether it is enabled on every keystroke. Caching the key keeps that off the hot path; it
+     * is only ever written through [update], which invalidates it.
+     */
+    @Volatile
+    private var cachedApiKey: String? = null
 
     override fun getState(): State = state
 
@@ -87,14 +117,40 @@ class CustomCommitAiSettings : PersistentStateComponent<CustomCommitAiSettings.S
     fun configuration(): ApiConfiguration = ApiConfiguration(
         normalizeBaseUrl(state.apiUrl),
         state.model.trim(),
-        PasswordSafe.instance.get(CREDENTIAL_ATTRIBUTES)?.getPasswordAsString().orEmpty(),
+        apiKey(),
         state.systemPrompt.trim(),
+        state.completionModel.trim(),
+        state.completionEnabled,
     )
 
-    fun update(apiUrl: String, model: String, apiKey: String, systemPrompt: String) {
+    /**
+     * The settings inline completion can check without touching the credential store — cheap
+     * enough to call on the EDT for every keystroke, which is exactly what happens.
+     */
+    fun completionPreferences(): CompletionPreferences = CompletionPreferences(
+        baseUrl = normalizeBaseUrl(state.apiUrl),
+        model = state.completionModel.trim(),
+        enabled = state.completionEnabled,
+    )
+
+    private fun apiKey(): String = cachedApiKey ?: PasswordSafe.instance
+        .get(CREDENTIAL_ATTRIBUTES)?.getPasswordAsString().orEmpty()
+        .also { cachedApiKey = it }
+
+    fun update(
+        apiUrl: String,
+        model: String,
+        apiKey: String,
+        systemPrompt: String,
+        completionModel: String,
+        completionEnabled: Boolean,
+    ) {
         state.apiUrl = normalizeBaseUrl(apiUrl)
         state.model = model.trim()
         state.systemPrompt = systemPrompt.trim().ifBlank { DEFAULT_PROMPT }
+        state.completionModel = completionModel.trim()
+        state.completionEnabled = completionEnabled
+        cachedApiKey = apiKey.trim()
         PasswordSafe.instance.set(
             CREDENTIAL_ATTRIBUTES,
             apiKey.trim().takeIf { it.isNotEmpty() }?.let { Credentials(CREDENTIAL_USER, it) }
@@ -103,6 +159,10 @@ class CustomCommitAiSettings : PersistentStateComponent<CustomCommitAiSettings.S
 
     companion object {
         private const val CREDENTIAL_USER = "api-key"
+
+        // Deliberately still the old product name: this string is the Password Safe lookup key.
+        // Renaming it to match the plugin would point at an empty entry and silently lose the
+        // stored API key.
         private val CREDENTIAL_ATTRIBUTES = CredentialAttributes(
             generateServiceName("Custom Commit AI", "API Key"),
             CREDENTIAL_USER,

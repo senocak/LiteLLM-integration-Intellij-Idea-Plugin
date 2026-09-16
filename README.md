@@ -1,10 +1,13 @@
-# Custom Commit AI
+# LiteLLM Integration
 
-Minimal IntelliJ IDEA plugin that adds a small **Generate Commit Message** action to the Commit tool window. It reads only the changes currently included for commit, sends their textual diff to the configured HTTP endpoint, and replaces the commit-message field with the response. It never commits automatically.
+IntelliJ IDEA plugin that connects the IDE to a LiteLLM-compatible gateway. It does two things:
+
+- **Generate Commit Message** — a Commit tool window action that reads only the changes currently included for commit, sends their diff to the gateway, and fills in the commit-message field. It never commits automatically.
+- **Inline code completion** — Copilot-style grey ghost text as you type, accepted with <kbd>Tab</kbd>.
 
 ## Configure
 
-In **Settings | Tools | Custom Commit AI**, enter the API URL, optional API key, and system prompt, then pick a model. The key is stored in IntelliJ's Password Safe rather than in the persistent settings XML.
+In **Settings | Tools | LiteLLM Integration**, enter the API URL, optional API key, and system prompt, then pick a model. The key is stored in IntelliJ's Password Safe rather than in the persistent settings XML.
 
 ### Model list
 
@@ -48,6 +51,48 @@ The client posts non-streaming Chat Completions, which on a LiteLLM gateway serv
 Two details are not interchangeable with the Anthropic body: the cap must be `max_completion_tokens`, because some backends reject `max_tokens` outright, and the system prompt must be a *message* — a top-level `system` property is refused as an unpermitted extra input.
 
 If `{base}/chat/completions` does not exist (404/405), the client retries once against `{base}/messages` with the Anthropic body and `anthropic-version: 2023-06-01`, so a plain Anthropic endpoint still works. Any other status is reported as-is rather than papered over, and the resolved dialect is remembered per gateway for the session. Responses are read from `choices[0].message.content` or Anthropic `content[]` blocks. `x-api-key` and `Authorization: Bearer` are sent only when a key is configured.
+
+## Inline code completion
+
+Pause while typing and the plugin asks the gateway to continue the code at your caret, rendering the reply as grey ghost text; <kbd>Tab</kbd> accepts, <kbd>Esc</kbd> dismisses. Invoking inline completion explicitly (⌥\ by default) skips the wait and works even with the checkbox off.
+
+| Setting | Effect |
+| --- | --- |
+| **Completion Model** | Model used for suggestions, chosen from the same auto-loaded list |
+| **Suggest completions while typing** | Off = suggestions only on explicit invocation |
+
+### Status bar
+
+A **LiteLLM** widget in the status bar reports what completion is doing, because the feature is otherwise silent and "slow" and "broken" look identical from the outside:
+
+| Shows | Meaning |
+| --- | --- |
+| `LiteLLM: off` | no base URL or completion model configured |
+| `LiteLLM: idle` | ready, nothing requested yet |
+| `LiteLLM: thinking…` | a request is in flight |
+| `LiteLLM: 1.4s` | last suggestion, with its round-trip time |
+| `LiteLLM: 1.4s (none)` | the model answered but had nothing to suggest |
+| `LiteLLM: failed` | hover for the reason |
+
+The timing is the diagnostic: if it reads 2s, the gateway is slow, not the plugin.
+
+### Pick a fast model
+
+This one setting decides whether the feature is usable. Measured against this gateway with the real completion prompt:
+
+| Model | Latency | Note |
+| --- | --- | --- |
+| `gpt-5.4-mini` | **~0.5s** | best choice |
+| `gpt-5.3-codex` | ~1.5s | |
+| `gpt-5.4` | ~1.6s | |
+| `gpt-5.6-terra` | ~2.5s | |
+| `gpt-5.1-codex-mini` | ~3.7s | **unusable** — spends the entire token budget reasoning and returns nothing |
+
+Add the 400 ms debounce on top. It will not match Copilot's ~200ms in any case: that runs a small model at the edge, this runs a general model across a corporate gateway.
+
+Requests fire only after a 400 ms pause and typing again cancels the one in flight, so holding a key down costs nothing. What gets sent is the code around the caret — roughly 60 lines before and 20 after, capped by character count — plus the file name and language. The Git diff is *not* included; suggestions follow the code you are writing, not your uncommitted changes.
+
+Replies are sanitised before display, because the prompt alone does not stop models from wrapping output in fences, restating the line you are on, or re-closing a brace the file already closes — and unlike a chat answer, a bad suggestion here lands in your file on <kbd>Tab</kbd>. Failures are logged and never notified; a flaky gateway must not produce a balloon per keystroke.
 
 ## Build and run
 

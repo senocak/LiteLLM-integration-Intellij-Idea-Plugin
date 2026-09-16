@@ -5,7 +5,8 @@ import com.intellij.notification.NotificationType
 import com.intellij.openapi.project.Project
 
 object CustomCommitAiNotifications {
-    private const val GROUP_ID = "Custom Commit AI"
+    /** Must match the notificationGroup id in plugin.xml exactly, or the lookup throws at runtime. */
+    private const val GROUP_ID = "LiteLLM Integration"
 
     fun info(project: Project?, message: String) = notify(project, message, NotificationType.INFORMATION)
 

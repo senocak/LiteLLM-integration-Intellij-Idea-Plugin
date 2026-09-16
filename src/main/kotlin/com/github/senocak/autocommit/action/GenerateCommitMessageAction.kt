@@ -39,7 +39,7 @@ class GenerateCommitMessageAction : AnAction(), DumbAware {
         val unversionedFiles: List<FilePath> = workflowUi?.getIncludedUnversionedFiles()?.toList().orEmpty()
 
         if (changes.isEmpty() && unversionedFiles.isEmpty()) {
-            LOG.info("Custom Commit AI: generation skipped because no changes are included for commit.")
+            LOG.info("LiteLLM Integration: generation skipped because no changes are included for commit.")
             CustomCommitAiNotifications.info(project, "No changes available to generate a commit message.")
             return
         }
@@ -55,7 +55,7 @@ class GenerateCommitMessageAction : AnAction(), DumbAware {
         event.presentation.description = "Generating commit message..."
         event.presentation.isEnabled = false
         LOG.info(
-            "Custom Commit AI: generating a commit message for ${changes.size} changed and " +
+            "LiteLLM Integration: generating a commit message for ${changes.size} changed and " +
                 "${unversionedFiles.size} unversioned included file(s)."
         )
 
@@ -71,12 +71,12 @@ class GenerateCommitMessageAction : AnAction(), DumbAware {
                         failure = "No changes available to generate a commit message."
                         return
                     }
-                    LOG.info("Custom Commit AI: prepared selected-file diff (chars=${diff.length}).")
+                    LOG.info("LiteLLM Integration: prepared selected-file diff (chars=${diff.length}).")
 
                     indicator.text = "Generating commit message..."
                     generatedMessage = CommitMessageClient.generateCommitMessage(configuration, diff)
                 } catch (exception: Exception) {
-                    LOG.warn("Custom Commit AI: generation failed (${exception.javaClass.simpleName}).")
+                    LOG.warn("LiteLLM Integration: generation failed (${exception.javaClass.simpleName}).")
                     failure = CommitMessageClient.userFacingMessage(exception)
                 }
             }
@@ -84,7 +84,7 @@ class GenerateCommitMessageAction : AnAction(), DumbAware {
             override fun onSuccess() {
                 generatedMessage?.let {
                     messageControl.setCommitMessage(it)
-                    LOG.info("Custom Commit AI: generated message inserted into the commit field.")
+                    LOG.info("LiteLLM Integration: generated message inserted into the commit field.")
                 }
                 failure?.let { CustomCommitAiNotifications.error(project, it) }
             }

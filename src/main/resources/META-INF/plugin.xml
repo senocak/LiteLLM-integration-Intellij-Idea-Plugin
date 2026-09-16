@@ -1,8 +1,15 @@
 <idea-plugin>
+    <!-- The id, the Kotlin package and the settings storage key still carry the plugin's
+         original "autocommit" name. Renaming any of them would make the IDE treat this as a
+         different plugin and drop the configured URL, model and API key, so only the
+         user-visible strings were changed. -->
     <id>com.github.senocak.autocommit</id>
-    <name>Custom Commit AI</name>
-    <vendor>Custom Commit AI</vendor>
-    <description><![CDATA[Generate Git commit messages using a configurable HTTP API.]]></description>
+    <name>LiteLLM Integration</name>
+    <vendor>LiteLLM Integration</vendor>
+    <description><![CDATA[
+        Connects the IDE to a LiteLLM-compatible gateway. Generates Git commit messages from the
+        changes included for commit, and suggests code inline as you type.
+    ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.modules.vcs</depends>
@@ -11,16 +18,23 @@
         <applicationConfigurable
                 parentId="tools"
                 id="com.github.senocak.autocommit.settings"
-                displayName="Custom Commit AI"
+                displayName="LiteLLM Integration"
                 instance="com.github.senocak.autocommit.settings.CustomCommitAiConfigurable"/>
-        <notificationGroup id="Custom Commit AI" displayType="BALLOON" isLogByDefault="true"/>
+        <notificationGroup id="LiteLLM Integration" displayType="BALLOON" isLogByDefault="true"/>
+        <inline.completion.provider
+                implementation="com.github.senocak.autocommit.completion.LiteLlmInlineCompletionProvider"/>
+        <!-- Inline completion is otherwise silent by design, so the status bar is where
+             "still waiting" is told apart from "failed, and here is why". -->
+        <statusBarWidgetFactory
+                id="LiteLlmCompletionStatus"
+                implementation="com.github.senocak.autocommit.completion.CompletionStatusWidgetFactory"/>
     </extensions>
 
     <actions>
         <action id="AutoCommit.GenerateCommitMessage"
                 class="com.github.senocak.autocommit.action.GenerateCommitMessageAction"
                 text="Generate Commit Message"
-                description="Generate a commit message from the current Git changes using a custom HTTP API."
+                description="Generate a commit message from the current Git changes using the configured LiteLLM gateway."
                 icon="/icons/sparkle.svg">
             <add-to-group group-id="ChangesView.CommitToolbar" anchor="last"/>
         </action>
