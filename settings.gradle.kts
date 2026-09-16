@@ -1,6 +1,6 @@
 import org.jetbrains.intellij.platform.gradle.extensions.intellijPlatform
 
-rootProject.name = "auto-commit-generator"
+rootProject.name = "litellm-integration"
 
 pluginManagement {
     plugins {
