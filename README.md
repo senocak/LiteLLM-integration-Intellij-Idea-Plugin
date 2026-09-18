@@ -106,3 +106,4 @@ The project targets IntelliJ IDEA 2025.3.5 and Java 21. The action is registered
 ### Screenshot
 <img src="img1.png" alt="Screenshot 1"/>
 <img src="img2.png" alt="Screenshot 2"/>
+<img src="img3.png" alt="Screenshot 3"/>

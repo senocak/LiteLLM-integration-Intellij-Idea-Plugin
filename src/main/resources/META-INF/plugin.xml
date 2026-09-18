@@ -8,7 +8,8 @@
     <vendor>LiteLLM Integration</vendor>
     <description><![CDATA[
         Connects the IDE to a LiteLLM-compatible gateway. Generates Git commit messages from the
-        changes included for commit, and suggests code inline as you type.
+        changes included for commit, suggests code inline as you type, and provides a chat tool
+        window you can send an editor selection to from the right-click menu.
     ]]></description>
 
     <depends>com.intellij.modules.platform</depends>
@@ -28,6 +29,12 @@
         <statusBarWidgetFactory
                 id="LiteLlmCompletionStatus"
                 implementation="com.github.senocak.autocommit.completion.CompletionStatusWidgetFactory"/>
+        <!-- The id must stay in step with CHAT_TOOL_WINDOW_ID: AddSelectionToChatAction looks the
+             window up by this string, and a mismatch fails silently rather than at build time. -->
+        <toolWindow id="LiteLLM Chat"
+                    anchor="right"
+                    icon="/icons/chat.svg"
+                    factoryClass="com.github.senocak.autocommit.chat.LiteLlmChatToolWindowFactory"/>
     </extensions>
 
     <actions>
@@ -37,6 +44,13 @@
                 description="Generate a commit message from the current Git changes using the configured LiteLLM gateway."
                 icon="/icons/sparkle.svg">
             <add-to-group group-id="ChangesView.CommitToolbar" anchor="last"/>
+        </action>
+        <action id="AutoCommit.AddSelectionToChat"
+                class="com.github.senocak.autocommit.chat.AddSelectionToChatAction"
+                text="Add Selection to LiteLLM Chat"
+                description="Attach the selected code to the LiteLLM Chat input as a fenced code block."
+                icon="/icons/chat.svg">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
         </action>
     </actions>
 </idea-plugin>

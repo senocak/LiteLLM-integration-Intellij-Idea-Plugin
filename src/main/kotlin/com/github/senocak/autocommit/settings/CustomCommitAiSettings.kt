@@ -54,6 +54,12 @@ data class CompletionPreferences(
     val configured: Boolean get() = baseUrl.isNotBlank() && model.isNotBlank()
 }
 
+/** Chat's non-secret settings, safe to read while constructing the tool-window UI on the EDT. */
+data class ChatPreferences(
+    val baseUrl: String,
+    val model: String,
+)
+
 data class ApiConfiguration(
     val apiUrl: String,
     val model: String,
@@ -69,6 +75,9 @@ data class ApiConfiguration(
     /** Everything inline completion needs before it is worth sending a request. */
     val completionReady: Boolean
         get() = apiUrl.isNotBlank() && apiKey.isNotBlank() && completionModel.isNotBlank()
+
+    /** The chat toolbar starts with the commit model; a chat can choose another model there. */
+    val effectiveChatModel: String get() = model
 
     val baseUrl: String get() = normalizeBaseUrl(apiUrl)
 
@@ -131,6 +140,12 @@ class CustomCommitAiSettings : PersistentStateComponent<CustomCommitAiSettings.S
         baseUrl = normalizeBaseUrl(state.apiUrl),
         model = state.completionModel.trim(),
         enabled = state.completionEnabled,
+    )
+
+    /** The model that should be visible before the asynchronous `/models` request finishes. */
+    fun chatPreferences(): ChatPreferences = ChatPreferences(
+        baseUrl = normalizeBaseUrl(state.apiUrl),
+        model = state.model.trim(),
     )
 
     private fun apiKey(): String = cachedApiKey ?: PasswordSafe.instance

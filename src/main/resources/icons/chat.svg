@@ -1,0 +1,7 @@
+<!-- 13x13: the size the platform expects for a tool-window stripe icon. The 24x24 sparkle.svg
+     used by the commit action would be downscaled and render muddy at this size. -->
+<svg width="13" height="13" viewBox="0 0 13 13" xmlns="http://www.w3.org/2000/svg">
+  <path fill="none" stroke="#6E6E6E" stroke-width="1.1" stroke-linejoin="round"
+        d="M1.6 2.2h9.8v6.4H5.2L2.8 10.8V8.6H1.6z"/>
+  <path fill="#6E6E6E" d="M3.8 4.3h5.4v1H3.8zM3.8 6.1h3.6v1H3.8z"/>
+</svg>
